@@ -334,7 +334,7 @@ class ContactCenter(object):
                     channel_service_time = self.env.now
                     if self.verbose:
                         print('{} gets service at t={:.2f}'.format(customer_name, channel_service_time))
-                    ###################################################################################################
+                    
                     if self.record_data:
                         # Get time customer waited to receive service
                         self.channel_wait_time[channel_pref].append(channel_service_time - channel_arrival_time)
@@ -345,7 +345,7 @@ class ContactCenter(object):
                     # Simulate receiving service
                     yield self.env.timeout(np.random.exponential(1. / channel_mu))
                     depart_channel_time = self.env.now
-                    ###################################################################################################
+                    
                     if self.record_data:
                         self.channel_service_time[channel_pref].append(depart_channel_time - channel_service_time)
                     if self.verbose:
@@ -363,7 +363,7 @@ class ContactCenter(object):
                             # If problem is not solved
                             # Check if customer request transfer or not
                             if np.random.rand() < communication_channel.not_solved_transfer_prob:
-                                ###################################################################################################
+                                
                                 if self.record_data:
                                     self.transfers += 1
                                     self.channel_transfers[channel_pref] += 1
@@ -373,7 +373,7 @@ class ContactCenter(object):
 
                             # if transfer not requested, end contact
                             else:
-                                ###################################################################################################
+                                
                                 if self.record_data:
                                     self.total_time.append(depart_channel_time - channel_arrival_time)
                                 if self.verbose:
@@ -382,7 +382,7 @@ class ContactCenter(object):
 
                         # if problem is resolved
                         else:
-                            ###################################################################################################
+                            
                             if self.record_data:
                                 self.resolutions += 1
                                 self.channel_resolutions[channel_pref] += 1
@@ -397,7 +397,7 @@ class ContactCenter(object):
                             print('{} no capability available t={:.2f}'.format(customer_name, depart_channel_time))
                         # self.abandons += 1 # customer does not abandon, just leave the system.
                         # self.channel_abandons[channel_pref] += 1
-                        ###################################################################################################
+                        
                             if self.record_data:
                                 self.total_time.append(depart_channel_time - channel_arrival_time)
 
@@ -426,7 +426,7 @@ class ContactCenter(object):
                 # Simulate customer checking if customer is available
                 yield self.env.timeout(1.0)
                 depart_channel_time = self.env.now
-                ###################################################################################################
+                
                 if self.record_data:
                     self.abandons += 1
                     self.channel_abandons[channel_pref] += 1
@@ -454,7 +454,6 @@ class ContactCenter(object):
                 if self.verbose:
                     print('{} assigned to CORRECT queue'.format(customer_name))
 
-                ###################################################################################################
                 if self.record_data:
                     self.csr_transfers[customer_issue_type] += 1
 
@@ -470,14 +469,12 @@ class ContactCenter(object):
                         if self.verbose:
                             print('{} gets CSR service at t={:.2f}'.format(customer_name, csr_service_time))
 
-                        ###################################################################################################
                         if self.record_data:
                             # Get time customer waited to receive service
                             self.csr_wait_time[customer_issue_type].append(csr_service_time - csr_queue_arrival_time)
 
                         # Check if customer was answered within the threshold time and update counters
                         if (csr_service_time - csr_queue_arrival_time) < self.threshold:
-                            ###################################################################################################
                             if self.record_data:
                                 self.csr_met_wait_threshold_general += 1
                                 self.csr_met_wait_threshold_queue[customer_issue_type] += 1
@@ -490,7 +487,6 @@ class ContactCenter(object):
 
                         # Check if issue is resolved
                         if np.random.rand() < csr.resolution_prob:
-                            ###################################################################################################
                             if self.record_data:
                                 self.resolutions += 1
                             # self.csr_resolutions[customer_issue_type] += 1
@@ -500,7 +496,6 @@ class ContactCenter(object):
                             if self.verbose:
                                 print('{} depart system at t={:.2f} with no contact resolution'.format(customer_name,
                                                                                                        csr_depart_time))
-                            ###################################################################################################
                             if self.record_data:
                                 self.abandons += 1
                             # self.csr_abandons[customer_issue_type] += 1
@@ -510,7 +505,7 @@ class ContactCenter(object):
                         csr_depart_time = self.env.now
                         if self.verbose:
                             print('{} abandoned before CSR service at t={:.2f}'.format(customer_name, csr_depart_time))
-                        ###################################################################################################
+                        
                         if self.record_data:
                             self.abandons += 1
                             # self.csr_abandons[customer_issue_type] += 1
@@ -522,7 +517,7 @@ class ContactCenter(object):
 
                     # Record total time customer spent in the system
                     # self.total_time.append(csr_depart_time - channel_arrival_time)
-                    ###################################################################################################
+                  
                     if self.record_data:
                         self.total_time.append(csr_depart_time - csr_queue_arrival_time)
 
@@ -536,7 +531,6 @@ class ContactCenter(object):
                 wrong_issues_list = [x for x in self.issue_types if x != customer_issue_type]
                 wrong_issue = random.choice(wrong_issues_list)
 
-                ###################################################################################################
                 if self.record_data:
                     # Update counter of transfers for the wrong issue queue. SL is a queue performance metric, not customer
                     self.csr_transfers[wrong_issue] += 1
@@ -555,7 +549,6 @@ class ContactCenter(object):
                         if self.verbose:
                             print('{} gets CSR service at t={:.2f}'.format(customer_name, csr_service_time))
 
-                        ###################################################################################################
                         if self.record_data:
                             #  met threshold?
                             if (csr_service_time - csr_queue_arrival_time) < self.threshold:
@@ -569,7 +562,6 @@ class ContactCenter(object):
                         with self.csr_resources[customer_issue_type].request(priority=self.csr_transfer_priority) as \
                                 csr_transfer_request:
 
-                            ###################################################################################################
                             if self.record_data:
                                 # Update counter of general transfers
                                 self.transfers += 1
@@ -588,7 +580,6 @@ class ContactCenter(object):
                                 if self.verbose:
                                     print('{} gets CSR service at t={:.2f}'.format(customer_name, csr_service_time))
 
-                                ###################################################################################################
                                 if self.record_data:
                                     # Get time customer waited to receive service
                                     self.csr_wait_time[customer_issue_type].append(
@@ -605,7 +596,6 @@ class ContactCenter(object):
                                 # get time of depart from system
                                 csr_depart_time = self.env.now
 
-                                ###################################################################################################
                                 if self.record_data:
                                     # Check if issue is resolved
                                     if np.random.rand() < csr.resolution_prob:
@@ -614,7 +604,7 @@ class ContactCenter(object):
 
                                 # if issue is not resolved
                                 else:
-                                    ###################################################################################################
+                                    
                                     if self.record_data:
                                         self.abandons += 1
                                     # self.csr_abandons[customer_issue_type] += 1
@@ -626,7 +616,6 @@ class ContactCenter(object):
                                 # get time of depart from system
                                 csr_depart_time = self.env.now
 
-                                ###################################################################################################
                                 if self.record_data:
                                     self.abandons += 1
                                     # self.csr_abandons[customer_issue_type] += 1
@@ -645,7 +634,6 @@ class ContactCenter(object):
                         # get time of departure from csr queue
                         csr_depart_time = self.env.now
 
-                        ###################################################################################################
                         if self.record_data:
                             self.abandons += 1
                             # self.csr_abandons[customer_issue_type] += 1
@@ -658,7 +646,6 @@ class ContactCenter(object):
                         if self.verbose:
                             print('{} abandoned before CSR service at t={:.2f}'.format(customer_name, csr_depart_time))
 
-                    ###################################################################################################
                     if self.record_data:
                         # self.total_time.append(csr_depart_time - channel_arrival_time)
                         self.total_time.append(csr_depart_time - csr_queue_arrival_time)
