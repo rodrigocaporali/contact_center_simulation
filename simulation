@@ -1,0 +1,1266 @@
+import pandas as pd
+import simpy
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+
+
+class Customer(object):
+    """
+    Class that defines the attributes, methods and state for the customer throughout the simulation
+    """
+
+    def __init__(self, customer_id, channel_preference, type_problem, theta):
+        """
+        Class constructor
+
+        Parameters:
+        -----------
+            customer_id (int): ID number for the customer
+            channel_preference (str): Defines the customer preference between WEB or PHONE
+            type_problem (str): Defines the type of problem that the interaction is aiming to solve
+            theta (float): Defines customer mean patience time to wait in queue
+        """
+
+        assert type(channel_preference) == str, print("channel_preference Has to be a string")
+        self.channel_preference = channel_preference
+
+        assert type(type_problem) == str, print("type_problem Has to be a string")
+        self.type_problem = type_problem
+
+        assert type(theta) == float, print("theta customer has to be a float")
+        self.patience = theta
+
+        self.ID = customer_id
+
+        # assert type(past_interactions) == dict, print("Has to be a dictionary")
+        # self.past_interactions = past_interactions
+
+
+class Channel(object):
+    """
+    Class that defines the attributes, methods and state for the Channel system throughout the simulation
+    """
+
+    def __init__(self, channel_type, specifications):
+        """
+        Class constructor
+
+        Parameters:
+        -----------
+            channel_type (str): type of communication channel 'web' or 'phone'
+            specifications (dict): set of parameters defining the communication channel
+        """
+
+        assert type(channel_type) == str, print("channel_type Has to be a str")
+        self.channel_type = channel_type
+        self.capacity = specifications[channel_type]['capacity']
+        self.channel_mu = specifications[channel_type]['channel_mu']
+        self.capabilities_list = specifications[channel_type]['capabilities_list']
+        self.resolution_prob = specifications[channel_type]['resolution_prob']
+        self.not_solved_transfer_prob = specifications[channel_type]['not_solved_transfer_prob']
+        self.reliability = specifications[channel_type]['reliability']
+
+        # assert type(mu) == float, print("Has to be a float")
+        # self.mu = mu
+        #
+        # assert type(capabilities_list) == list, print("Has to be a list")
+        # self.capabilities = capabilities_list
+        #
+        # assert type(resolution_probability) == float, print("Has to be a float")
+        # self.resolution_probability = resolution_probability
+        #
+        # assert type(transf_probability) == float, print("Has to be a float")
+        # self.transf_probability = transf_probability
+        #
+        # assert type(reliability) == float, print("Has to be a float")
+        # self.reliability = reliability
+
+
+class Agent(object):
+    """
+    Class that defines the attributes, methods and state for the Customer Service Rep throughout the simulation
+    """
+
+    def __init__(self, agent_type, specifications):
+        """
+        Class constructor
+
+        Parameters:
+        -----------
+            agent_type (str): type of issue customer service representative is specialized
+            specifications (dict): set of parameters defining the customer service representative
+        """
+
+        assert type(agent_type) == str, print("agent_type has to be a int")
+        self.agent_type = agent_type
+
+        assert type(specifications[agent_type]['mu_agents']) == float, print("mu agent has to be a float")
+        self.csr_mu = specifications[agent_type]['mu_agents']
+
+        assert type(specifications[agent_type]['resolution_prob']) == float, print("resolution_prob has to be a float")
+        self.resolution_prob = specifications[agent_type]['resolution_prob']
+
+        assert type(specifications[agent_type]['num_agents']) == int, print("num_agents has to be a int")
+        self.num_agents = specifications[agent_type]['num_agents']
+
+        #
+        # assert type(csr_mu) == float, print("mu agent has to be a float")
+        # self.csr_mu = csr_mu
+        #
+        # assert type(resolution_prob) == float, print("resolution_prob has to be a float")
+        # self.resolution_prob = resolution_prob
+        #
+        # assert type(num_agents) == int, print("num_agents has to be a int")
+        # self.num_agents = num_agents
+
+
+class ContactCenter(object):
+    """
+    Defines a contact center simulation.
+    """
+
+    def __init__(self, env, _lambda, channel_types, issue_types, contact_distribution_accuracy,
+                 channels_specifications, csrs_specifications, customer_patience, wrong_routing_aht,
+                 csr_transfer_priority, channel_match_accuracy, threshold, verbose, warmup_time):
+        """
+        Class constructor.
+
+        Parameters:
+        -----------
+            env (simpy.Environment): the simulation environment
+            _lambda (float): the average inter-arrival period (minutes) | Customers per minute
+            channel_types (list): communication channels available
+            issue_types (list): contact motivation types
+            contact_distribution_accuracy (float): percent of customers correctly routed to appropriate CSR queue
+            channels_specifications (dict): significations of communication channels
+            csrs_specifications (dict): specifications of CSRs
+            customer_patience (float): the average customer patience (minutes) | minutes per customer
+            wrong_routing_aht (float): AHT when customer is assigned to wrong CSR
+            csr_transfer_priority (int): 0 for no priority when transfer customer by CSR, -1 for high priority
+            threshold (float): limit to speed to answer customer used to determine service level (in minutes)
+            verbose (boolean): True for printing log activity, False for not printing activity
+            warmup_time (int): simulation warm-up period in minutes
+        """
+
+        # Parameters
+        self.env = env
+        self._lambda = _lambda
+        self.channel_types = channel_types
+        self.issue_types = issue_types
+        self.wrong_routing_aht = wrong_routing_aht
+        self.csr_transfer_priority = csr_transfer_priority
+        self.contact_distribution_accuracy = contact_distribution_accuracy
+        self.channels_specifications = channels_specifications
+        self.csrs_specifications = csrs_specifications
+        self.patience = customer_patience
+        self.threshold = threshold
+        self.channel_match_accuracy = channel_match_accuracy
+        self.verbose = verbose
+
+        # State record variables
+        self.total_time = []
+
+        self.channel_resources = {}
+        self.channel_wait_time = {}
+        self.channel_service_time = {}
+
+        self.csr_resources = {}
+        self.csr_wait_time = {}
+        self.csr_service_time = {}
+
+        # Outcome
+        self.abandons = 0
+        self.resolutions = 0
+        self.transfers = 0
+        self.transfer_flag = 0
+        self.intra_transfers = 0
+
+        self.channel_resolutions = {}
+        self.channel_abandons = {}
+        self.channel_transfers = {}
+        self.csr_transfers = {}
+
+        # self.csr_resolutions = {}
+        # self.csr_abandons = {}
+
+        # Service Quality
+        self.csr_met_wait_threshold_general = 0
+        self.csr_met_wait_threshold_queue = {}
+
+        self.record_data = False
+        self.warmup_time = warmup_time
+
+        for channel_type in self.channel_types:
+            communication_channel = Channel(channel_type, channels_specifications)
+            self.channel_resources.update({channel_type: simpy.Resource(env, capacity=communication_channel.capacity)})
+            self.channel_wait_time.update({channel_type: []})
+            self.channel_service_time.update({channel_type: []})
+            self.channel_resolutions.update({channel_type: 0})
+            self.channel_abandons.update({channel_type: 0})
+            self.channel_transfers.update({channel_type: 0})
+
+        for queue in self.issue_types:
+            issue_channel = Agent(agent_type=queue,
+                                  specifications=self.csrs_specifications)
+            # PriorityResource is a subclass of Resource lets requesting processes provide a priority for each request.
+            # More important requests will gain access to the resource earlier than less important ones.
+            # Priority is expressed by integer numbers; smaller numbers mean a higher priority.
+            self.csr_resources.update({queue: simpy.PriorityResource(env, capacity=issue_channel.num_agents)})
+            self.csr_wait_time.update({queue: []})
+            self.csr_service_time.update({queue: []})
+            # self.csr_resolutions.update({queue: 0})
+            # self.csr_abandons.update({queue: 0})
+            self.csr_met_wait_threshold_queue.update({queue: 0})
+            self.csr_transfers.update({queue: 0})
+
+    def choose_channel(self, customer_issue):
+        """
+        This function determines which contact channel the customer selects to use.
+        :param customer_issue:
+        :return:
+        """
+
+        # If channel matching accuracy is provided, check if there are more than one
+        # type of channel listed and proceed to use this probability to increase the
+        # chances of selecting the channel that presents the highest contact resolution
+        # and is capable of solving the customer issue
+        if (self.channel_match_accuracy != 0.0) and (len(self.channel_types) > 1):
+            highest_resolution = 0.0
+            # matching_channel = list(self.channels_specifications.keys())[0]
+            matching_channel = 'temp'
+
+            # first create a list of the channels that have the capability
+            for channel in self.channel_types:
+                if customer_issue in self.channels_specifications[channel]['capabilities_list']:
+                    if self.channels_specifications[channel]['resolution_prob'] > highest_resolution:
+                        highest_resolution = self.channels_specifications[channel]['resolution_prob']
+                        matching_channel = channel
+
+            # Define the channel of preference based on matching accuracy provided
+            if np.random.rand() > self.channel_match_accuracy:
+                other_channels = [x for x in self.channel_types if x != matching_channel]
+                # Assign wrong channel preference
+                matching_channel = random.choice(other_channels)
+        else:
+            # If channel matching accuracy is not provided, randomly select the channel
+            # from the pool of available channels.
+            matching_channel = random.choice(self.channel_types)
+
+        return matching_channel
+
+    def run(self):
+        """
+        Process for simulating a contact center.
+        """
+
+        # initialize the customer counter
+        customers_counter = 0
+        # enter infinite loop
+        while True:
+            # print('t={:.2f}'.format(self.env.now))
+
+            # wait for the next arrival
+            yield self.env.timeout(np.random.exponential(1. / self._lambda))
+
+            # increment a counter
+            customers_counter += 1
+
+            # Create new customer
+            # channel_choice = random.choice(self.channel_types)
+
+            # channel_choice = 'phone'
+            issue_type = random.choice(self.issue_types)
+
+            channel_choice = self.choose_channel(issue_type)
+
+            new_customer = Customer(customer_id=customers_counter,
+                                    channel_preference=channel_choice,
+                                    type_problem=issue_type,
+                                    theta=self.patience)
+
+            # launch the customer process
+            self.env.process(self.handle_customer(customer_name='Cust {}'.format(customers_counter),
+                                                  customer=new_customer))
+            # print(customers_counter)
+
+    def handle_customer(self, customer_name, customer):
+        """
+        Process for simulating a customer.
+
+        Parameters:
+        -----------
+            env (simpy.Environment): the simulation environment
+            customer (str): the customer name
+            servers (simpy.Resource): the servers resource
+            ivr (simpy.Resource): the ivr servers resource
+            _mu (float): the average service period (minutes)
+        """
+
+        ############################################
+        # Self-Service Stage
+        ############################################
+
+        channel_pref = customer.channel_preference
+        transfer_flag = False
+        end_of_contact = False
+
+        if self.env.now > self.warmup_time:
+            self.record_data = True
+
+        while (not transfer_flag) and (not end_of_contact):
+            # Get time of arrival
+            channel_arrival_time = self.env.now
+            if self.verbose:
+                print('{} enters contact center at t={:.2f}'.format(customer_name, channel_arrival_time))
+                print('{} preference Channel = {}'.format(customer_name, channel_pref))
+
+            communication_channel = Channel(channel_pref, self.channels_specifications)
+
+            # Check if channel is available (99% availability)
+            # rand() generates a random number from a uniform distribution over [0, 1).
+            if np.random.rand() < communication_channel.reliability:
+                if self.verbose:
+                    print('Channel available! Initiate self service')
+
+                with self.channel_resources[channel_pref].request() as channel_request:
+                    if self.verbose:
+                        print('{} requests service at t={:.2f}'.format(customer_name, channel_arrival_time))
+                    # wait for the request to be fulfilled
+                    yield channel_request
+
+                    # Get time received service
+                    channel_service_time = self.env.now
+                    if self.verbose:
+                        print('{} gets service at t={:.2f}'.format(customer_name, channel_service_time))
+                    ###################################################################################################
+                    if self.record_data:
+                        # Get time customer waited to receive service
+                        self.channel_wait_time[channel_pref].append(channel_service_time - channel_arrival_time)
+
+                    # set time spend in the channel
+                    channel_mu = communication_channel.channel_mu
+
+                    # Simulate receiving service
+                    yield self.env.timeout(np.random.exponential(1. / channel_mu))
+                    depart_channel_time = self.env.now
+                    ###################################################################################################
+                    if self.record_data:
+                        self.channel_service_time[channel_pref].append(depart_channel_time - channel_service_time)
+                    if self.verbose:
+                        print('{} departs channel at t={:.2f}'.format(customer_name, depart_channel_time))
+
+                    # Test if channel offers necessary capabilities to solve customer's issue
+                    if customer.type_problem in communication_channel.capabilities_list:
+                        if self.verbose:
+                            print('{} issue = {}'.format(customer_name, customer.type_problem))
+                            print('Channel capabilities = {}'.format(communication_channel.capabilities_list))
+
+                        # Define if problem is resolved or not
+                        # rand() generates a random number from a uniform distribution over [0, 1).
+                        if np.random.rand() > communication_channel.resolution_prob:
+                            # If problem is not solved
+                            # Check if customer request transfer or not
+                            if np.random.rand() < communication_channel.not_solved_transfer_prob:
+                                ###################################################################################################
+                                if self.record_data:
+                                    self.transfers += 1
+                                    self.channel_transfers[channel_pref] += 1
+                                transfer_flag = True
+                                if self.verbose:
+                                    print('{} request TRANSFER t={:.2f}'.format(customer_name, depart_channel_time))
+
+                            # if transfer not requested, end contact
+                            else:
+                                ###################################################################################################
+                                if self.record_data:
+                                    self.total_time.append(depart_channel_time - channel_arrival_time)
+                                if self.verbose:
+                                    print('{} end of contact t={:.2f}'.format(customer_name, depart_channel_time))
+                                end_of_contact = True
+
+                        # if problem is resolved
+                        else:
+                            ###################################################################################################
+                            if self.record_data:
+                                self.resolutions += 1
+                                self.channel_resolutions[channel_pref] += 1
+                                self.total_time.append(depart_channel_time - channel_arrival_time)
+                            if self.verbose:
+                                print('{} end of contact t={:.2f}'.format(customer_name, depart_channel_time))
+                            end_of_contact = True
+
+                    # If channel DOES NOT offer necessary capabilities to solve customer's issue
+                    else:
+                        if self.verbose:
+                            print('{} no capability available t={:.2f}'.format(customer_name, depart_channel_time))
+                        # self.abandons += 1 # customer does not abandon, just leave the system.
+                        # self.channel_abandons[channel_pref] += 1
+                        ###################################################################################################
+                            if self.record_data:
+                                self.total_time.append(depart_channel_time - channel_arrival_time)
+
+                        # Check which channel provides the necessary capability
+                        correct_channel = None
+                        for channel_type in self.channel_types:
+                            test_channel = Channel(channel_type, self.channels_specifications)
+                            if customer.type_problem in test_channel.capabilities_list:
+                                correct_channel = channel_type
+
+                        # If no channel offer the capability
+                        if correct_channel is None:
+                            if self.verbose:
+                                print('{} end of contact LACK OF CAPABILITY t={:.2f}'.format(customer_name,
+                                                                                             depart_channel_time))
+                            end_of_contact = True
+                        else:
+                            if self.verbose:
+                                print('{} will enter ANOTHER CHANNEL t={:.2f}'.format(customer_name,
+                                                                                      depart_channel_time))
+                            channel_pref = correct_channel
+
+            else:
+                if self.verbose:
+                    print('Channel NOT available!')
+                # Simulate customer checking if customer is available
+                yield self.env.timeout(1.0)
+                depart_channel_time = self.env.now
+                ###################################################################################################
+                if self.record_data:
+                    self.abandons += 1
+                    self.channel_abandons[channel_pref] += 1
+                    self.total_time.append(depart_channel_time - channel_arrival_time)
+                end_of_contact = True
+
+        ############################################
+        # Assisted Service
+        ############################################
+
+        # If contact is transferred and customer didn't not abandon
+        if transfer_flag:
+
+            # Get time customer is transferred to queue
+            # csr_queue_arrival_time = depart_channel_time
+            csr_queue_arrival_time = self.env.now
+            customer_issue_type = customer.type_problem
+            csr = Agent(agent_type=customer_issue_type,
+                        specifications=self.csrs_specifications)
+            aht = csr.csr_mu
+
+            # check if customer will be correctly assigned to queue related to the issue
+            # rand() generates a random number from a uniform distribution over [0, 1).
+            if np.random.rand() < self.contact_distribution_accuracy:
+                if self.verbose:
+                    print('{} assigned to CORRECT queue'.format(customer_name))
+
+                ###################################################################################################
+                if self.record_data:
+                    self.csr_transfers[customer_issue_type] += 1
+
+                with self.csr_resources[customer_issue_type].request(priority=0) as csr_request:
+
+                    # Wait for the request to be fulfilled
+                    patience = np.random.exponential(customer.patience)
+                    result_csr_queue = yield csr_request | self.env.timeout(patience)
+                    if csr_request in result_csr_queue:
+
+                        # get time received service from csr
+                        csr_service_time = self.env.now
+                        if self.verbose:
+                            print('{} gets CSR service at t={:.2f}'.format(customer_name, csr_service_time))
+
+                        ###################################################################################################
+                        if self.record_data:
+                            # Get time customer waited to receive service
+                            self.csr_wait_time[customer_issue_type].append(csr_service_time - csr_queue_arrival_time)
+
+                        # Check if customer was answered within the threshold time and update counters
+                        if (csr_service_time - csr_queue_arrival_time) < self.threshold:
+                            ###################################################################################################
+                            if self.record_data:
+                                self.csr_met_wait_threshold_general += 1
+                                self.csr_met_wait_threshold_queue[customer_issue_type] += 1
+
+                        # AHT is the standard
+                        yield self.env.timeout(np.random.exponential(1. / aht))
+
+                        # get time of departure from csr queue
+                        csr_depart_time = self.env.now
+
+                        # Check if issue is resolved
+                        if np.random.rand() < csr.resolution_prob:
+                            ###################################################################################################
+                            if self.record_data:
+                                self.resolutions += 1
+                            # self.csr_resolutions[customer_issue_type] += 1
+
+                        # if issue not resolved
+                        else:
+                            if self.verbose:
+                                print('{} depart system at t={:.2f} with no contact resolution'.format(customer_name,
+                                                                                                       csr_depart_time))
+                            ###################################################################################################
+                            if self.record_data:
+                                self.abandons += 1
+                            # self.csr_abandons[customer_issue_type] += 1
+
+                    else:
+                        # get time of departure from csr queue
+                        csr_depart_time = self.env.now
+                        if self.verbose:
+                            print('{} abandoned before CSR service at t={:.2f}'.format(customer_name, csr_depart_time))
+                        ###################################################################################################
+                        if self.record_data:
+                            self.abandons += 1
+                            # self.csr_abandons[customer_issue_type] += 1
+                            self.csr_wait_time[customer_issue_type].append(csr_depart_time - csr_queue_arrival_time)
+                            # Check if customer was answer within the threshold time and update counters
+                            if (csr_depart_time - csr_queue_arrival_time) < self.threshold:
+                                self.csr_met_wait_threshold_general += 1
+                                self.csr_met_wait_threshold_queue[customer_issue_type] += 1
+
+                    # Record total time customer spent in the system
+                    # self.total_time.append(csr_depart_time - channel_arrival_time)
+                    ###################################################################################################
+                    if self.record_data:
+                        self.total_time.append(csr_depart_time - csr_queue_arrival_time)
+
+            # if not correctly assigned, customer goes to wrong queue spend some
+            # time talking to agent before getting transferred to correct queue.
+            else:
+                if self.verbose:
+                    print('{} assigned to WRONG queue'.format(customer_name))
+
+                # Create list with issues except from the correct one
+                wrong_issues_list = [x for x in self.issue_types if x != customer_issue_type]
+                wrong_issue = random.choice(wrong_issues_list)
+
+                ###################################################################################################
+                if self.record_data:
+                    # Update counter of transfers for the wrong issue queue. SL is a queue performance metric, not customer
+                    self.csr_transfers[wrong_issue] += 1
+
+                # Make a request on the wrong queue
+                with self.csr_resources[wrong_issue].request(priority=0) as csr_wrong_request:
+
+                    # Wait for the request to be fulfilled or abandon before receiving assistance
+                    patience = np.random.exponential(customer.patience)
+                    result_csr_queue = yield csr_wrong_request | self.env.timeout(patience)
+
+                    if csr_wrong_request in result_csr_queue:
+
+                        # get time received service from csr
+                        csr_service_time = self.env.now
+                        if self.verbose:
+                            print('{} gets CSR service at t={:.2f}'.format(customer_name, csr_service_time))
+
+                        ###################################################################################################
+                        if self.record_data:
+                            #  met threshold?
+                            if (csr_service_time - csr_queue_arrival_time) < self.threshold:
+                                self.csr_met_wait_threshold_general += 1
+                                self.csr_met_wait_threshold_queue[wrong_issue] += 1
+
+                        # AHT is lower and the customer will be re-entering the correct queue
+                        yield self.env.timeout(np.random.exponential(1. / self.wrong_routing_aht))
+
+                        # Customer is transferred to correct queue
+                        with self.csr_resources[customer_issue_type].request(priority=self.csr_transfer_priority) as \
+                                csr_transfer_request:
+
+                            ###################################################################################################
+                            if self.record_data:
+                                # Update counter of general transfers
+                                self.transfers += 1
+                                # Update counter of transfers for specific issue queue
+                                self.csr_transfers[customer_issue_type] += 1
+
+                            csr_transfer_queue_arrival_time = self.env.now
+                            # Wait for the request to be fulfilled
+                            patience = np.random.exponential(customer.patience)
+                            result_csr_transfer_request = yield csr_transfer_request | self.env.timeout(patience)
+
+                            if csr_transfer_request in result_csr_transfer_request:
+                                # get time received service from csr
+                                csr_service_time = self.env.now
+
+                                if self.verbose:
+                                    print('{} gets CSR service at t={:.2f}'.format(customer_name, csr_service_time))
+
+                                ###################################################################################################
+                                if self.record_data:
+                                    # Get time customer waited to receive service
+                                    self.csr_wait_time[customer_issue_type].append(
+                                        csr_service_time - csr_transfer_queue_arrival_time)
+
+                                    # Check if customer was answer within the threshold time and update counters
+                                    if (csr_service_time - csr_transfer_queue_arrival_time) < self.threshold:
+                                        self.csr_met_wait_threshold_general += 1
+                                        self.csr_met_wait_threshold_queue[customer_issue_type] += 1
+
+                                # AHT is the standard
+                                yield self.env.timeout(np.random.exponential(1. / aht))
+
+                                # get time of depart from system
+                                csr_depart_time = self.env.now
+
+                                ###################################################################################################
+                                if self.record_data:
+                                    # Check if issue is resolved
+                                    if np.random.rand() < csr.resolution_prob:
+                                       self.resolutions += 1
+                                       # self.csr_resolutions[customer_issue_type] += 1
+
+                                # if issue is not resolved
+                                else:
+                                    ###################################################################################################
+                                    if self.record_data:
+                                        self.abandons += 1
+                                    # self.csr_abandons[customer_issue_type] += 1
+                                    if self.verbose:
+                                        print('{} depart system at t={:.2f} with no contact resolution'.format(
+                                            customer_name, csr_depart_time))
+
+                            else:
+                                # get time of depart from system
+                                csr_depart_time = self.env.now
+
+                                ###################################################################################################
+                                if self.record_data:
+                                    self.abandons += 1
+                                    # self.csr_abandons[customer_issue_type] += 1
+                                    self.csr_wait_time[customer_issue_type].append(
+                                        csr_depart_time - csr_transfer_queue_arrival_time)
+
+                                    # Check if customer was answer within the threshold time and update counters
+                                    if (csr_depart_time - csr_transfer_queue_arrival_time) < self.threshold:
+                                        self.csr_met_wait_threshold_general += 1
+                                        self.csr_met_wait_threshold_queue[customer_issue_type] += 1
+                                if self.verbose:
+                                    print('{} abandoned before CSR service at t={:.2f}'.format(customer_name,
+                                                                                           csr_depart_time))
+
+                    else:
+                        # get time of departure from csr queue
+                        csr_depart_time = self.env.now
+
+                        ###################################################################################################
+                        if self.record_data:
+                            self.abandons += 1
+                            # self.csr_abandons[customer_issue_type] += 1
+                            self.csr_wait_time[customer_issue_type].append(csr_depart_time - csr_queue_arrival_time)
+                            # Check if customer was answer within the threshold time and update counters
+                            if (csr_depart_time - csr_queue_arrival_time) < self.threshold:
+                                self.csr_met_wait_threshold_general += 1
+                                self.csr_met_wait_threshold_queue[wrong_issue] += 1
+
+                        if self.verbose:
+                            print('{} abandoned before CSR service at t={:.2f}'.format(customer_name, csr_depart_time))
+
+                    ###################################################################################################
+                    if self.record_data:
+                        # self.total_time.append(csr_depart_time - channel_arrival_time)
+                        self.total_time.append(csr_depart_time - csr_queue_arrival_time)
+
+
+def observe(env, simu_contact_center, types_channels, types_issues, obs_time, obs_abandons, obs_resolutions,
+            obs_total_time, queue_length, csr_queue_length, obs_csr_queue_wait_time, obs_csr_met_wait_threshold_general,
+            obs_csr_met_wait_threshold_queue, obs_csr_queue_util, warmup_time):
+    """
+    Process to observe the queue length during a simulation.
+
+    Parameters:
+    -----------
+        env (simpy.Environment): the simulation environment
+        simu_contact_center (ContactCenter): the contact center to observe
+        types_channels (list): type of communication channels available
+        obs_time (list): the observation times
+        obs_abandons (list): the observed abandons
+        obs_resolutions (list): the observed contact resolution
+        obs_total_time (list): the observed total customer time in the system
+        queue_length (list): the observed queue length
+        obs_csr_queue_wait_time (list): the observed queue time
+        obs_csr_met_wait_threshold_general (list): the observed time customer wait
+        obs_csr_met_wait_threshold_queue (list): the observed time customer wait by queue type
+        obs_csr_queue_util (dict): the observed number of busy CSR by queue type
+        warmup_time (int): total time of simulation warmup period in minutes
+    """
+    while True:
+        obs_time.append(env.now)
+        if env.now > warmup_time:
+            obs_abandons.append(simu_contact_center.abandons)
+            obs_resolutions.append(simu_contact_center.resolutions)
+            obs_total_time.append(simu_contact_center.total_time)
+            obs_csr_met_wait_threshold_general.append(simu_contact_center.csr_met_wait_threshold_general)
+            for channel_type in types_channels:
+                queue_length[channel_type].append(len(simu_contact_center.channel_resources[channel_type].queue))
+            for issue_type in types_issues:
+                csr_queue_length[issue_type].append(len(simu_contact_center.csr_resources[issue_type].queue))
+                obs_csr_queue_wait_time[issue_type].append(simu_contact_center.csr_wait_time[issue_type])
+                # obs_csr_met_wait_threshold_queue[issue_type].append(
+                #     simu_contact_center.csr_met_wait_threshold_queue[issue_type])
+                obs_csr_queue_util[issue_type].append(simu_contact_center.csr_resources[issue_type].count)
+
+        yield env.timeout(1.0)
+
+
+def run_erlang_c(num_runs=100, sim_duration=3000, type_issues=['billing'], type_channel=['phone']):
+    """
+    Erlang C
+
+    Parameters:
+    -----------
+        num_runs: (int) number of simulation runs to perform
+        sim_duration: (int) simulation duration (minutes)
+        type_issues: (list)
+        type_channel: (list)
+    """
+
+    avg_time_in_system = []
+    avg_csr_queue_length = []
+    avg_csr_queue_wait_time = []
+    avg_sl = []
+
+    # SECTION TO RUN ANALYSIS
+    for i in range(num_runs):
+        np.random.seed(1)
+
+        channel_specifications = {'phone': {'capabilities_list': ['billing'],
+                                            'channel_mu': 10000.0,
+                                            'resolution_prob': 0.0,
+                                            'not_solved_transfer_prob': 1.0,
+                                            'reliability': 1.0,
+                                            'capacity': 10000}}
+
+        csr_specifications = {'billing': {'num_agents': 1,
+                                          'mu_agents': 4.,
+                                          'resolution_prob': 1.0}}
+        # arrays to record data
+        obs_time = []
+        obs_abandons = []
+        obs_resolutions = []
+        obs_total_time = []
+        obs_csr_met_wait_threshold_general = []
+        queue_length = {}
+        csr_queue_length = {}
+        obs_csr_queue_wait_time = {}
+        obs_csr_met_wait_threshold_queue = {}
+
+        for channel in type_channel:
+            queue_length[channel] = []
+        for issue in type_issues:
+            csr_queue_length[issue] = []
+            obs_csr_queue_wait_time[issue] = []
+            obs_csr_met_wait_threshold_queue[issue] = []
+
+        # set the random number seed
+        np.random.seed(i)
+
+        # create the Simpy environment
+        env = simpy.Environment()
+
+        # Create contact center
+        contact_center = ContactCenter(env=env,
+                                       _lambda=3,
+                                       channel_types=type_channel,
+                                       issue_types=type_issues,
+                                       contact_distribution_accuracy=1.0,
+                                       channels_specifications=channel_specifications,
+                                       csrs_specifications=csr_specifications,
+                                       customer_patience=1000000.,
+                                       wrong_routing_aht=2.,
+                                       csr_transfer_priority=0,
+                                       threshold=0.5,
+                                       verbose=True)
+
+        # add the contact center run process
+        env.process(contact_center.run())
+
+        # add the observation process
+        env.process(observe(env=env,
+                            simu_contact_center=contact_center,
+                            types_channels=type_channel,
+                            types_issues=type_issues,
+                            obs_time=obs_time,
+                            obs_abandons=obs_abandons,
+                            obs_resolutions=obs_resolutions,
+                            obs_total_time=obs_total_time,
+                            queue_length=queue_length,
+                            csr_queue_length=csr_queue_length,
+                            obs_csr_queue_wait_time=obs_csr_queue_wait_time,
+                            obs_csr_met_wait_threshold_general=obs_csr_met_wait_threshold_general,
+                            obs_csr_met_wait_threshold_queue=obs_csr_met_wait_threshold_queue))
+
+        # run simulation
+        env.run(until=sim_duration)
+
+        # %% Confidence intervals
+        confidence_level = 0.05
+        z_crit = stats.norm.ppf(1 - confidence_level / 2)
+
+        avg_time_in_system.append(np.mean(obs_total_time[2000:]))
+
+        avg_csr_queue_length.append(np.mean(csr_queue_length['billing'][2000:]))
+        avg_csr_queue_wait_time.append(np.mean(obs_csr_queue_wait_time['billing'][2000:]))
+
+        avg_sl.append(float(contact_center.csr_met_wait_threshold_general)
+                      / len(contact_center.total_time))
+
+    # Confidence intervals
+    confidence_level = 0.05
+    z_crit = stats.norm.ppf(1 - confidence_level / 2)
+
+    print('Mean time in the system = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_time_in_system),
+                                                                       z_crit * stats.sem(avg_time_in_system, axis=None,
+                                                                                          ddof=1)))
+    print('Mean queue length = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_csr_queue_length),
+                                                                 z_crit * stats.sem(avg_csr_queue_length, axis=None,
+                                                                                    ddof=1)))
+    print('Mean queue time = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_csr_queue_wait_time),
+                                                               z_crit * stats.sem(avg_csr_queue_wait_time, axis=None,
+                                                                                  ddof=1)))
+    print('Mean Service Level = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_sl),
+                                                                  z_crit * stats.sem(avg_sl, axis=None, ddof=1)))
+
+
+def run_erlang_a(num_runs=100, sim_duration=3000, type_issues=['billing'], type_channel=['phone']):
+    """
+    Erlang A
+
+    Parameters:
+    -----------
+        num_runs: (int) number of simulation runs to perform
+        sim_duration: (int) simulation duration (minutes)
+        type_issues: (list) list of contact issues
+        type_channel: (list) list of communication channels
+    """
+
+    avg_time_in_system = []
+    avg_csr_queue_length = []
+    avg_csr_queue_wait_time = []
+    avg_sl = []
+    avg_abandons = []
+    # SECTION TO RUN ANALYSIS
+    for i in range(num_runs):
+
+        channel_specifications = {'phone': {'capabilities_list': ['billing'],
+                                            'channel_mu': 100000.0,
+                                            'resolution_prob': 0.0,
+                                            'not_solved_transfer_prob': 1.0,
+                                            'reliability': 1.0,
+                                            'capacity': 10000}}
+
+        csr_specifications = {'billing': {'num_agents': 55,
+                                          'mu_agents': 1.0 / 2,
+                                          'resolution_prob': 1.0}}
+
+        # arrays to record data
+        obs_time = []
+        obs_abandons = []
+        obs_resolutions = []
+        obs_total_time = []
+        obs_csr_met_wait_threshold_general = []
+        queue_length = {}
+        csr_queue_length = {}
+        obs_csr_queue_wait_time = {}
+        obs_csr_met_wait_threshold_queue = {}
+
+        for channel in type_channel:
+            queue_length[channel] = []
+        for issue in type_issues:
+            csr_queue_length[issue] = []
+            obs_csr_queue_wait_time[issue] = []
+            obs_csr_met_wait_threshold_queue[issue] = []
+
+        # set the random number seed
+        np.random.seed(i)
+
+        # create the Simpy environment
+        env = simpy.Environment()
+
+        # create contact center
+        contact_center = ContactCenter(env=env,
+                                       _lambda=25,
+                                       channel_types=type_channel,
+                                       issue_types=type_issues,
+                                       contact_distribution_accuracy=1.0,
+                                       channels_specifications=channel_specifications,
+                                       csrs_specifications=csr_specifications,
+                                       customer_patience=4.,
+                                       wrong_routing_aht=2.,
+                                       csr_transfer_priority=0,
+                                       threshold=0.5,
+                                       verbose=False)
+
+        # add the contact center run process
+        env.process(contact_center.run())
+
+        # add the observation process
+        env.process(observe(env=env,
+                            simu_contact_center=contact_center,
+                            types_channels=type_channel,
+                            types_issues=type_issues,
+                            obs_time=obs_time,
+                            obs_abandons=obs_abandons,
+                            obs_resolutions=obs_resolutions,
+                            obs_total_time=obs_total_time,
+                            queue_length=queue_length,
+                            csr_queue_length=csr_queue_length,
+                            obs_csr_queue_wait_time=obs_csr_queue_wait_time,
+                            obs_csr_met_wait_threshold_general=obs_csr_met_wait_threshold_general,
+                            obs_csr_met_wait_threshold_queue=obs_csr_met_wait_threshold_queue))
+
+        # run simulation
+        env.run(until=sim_duration)
+
+        avg_time_in_system.append(np.mean(obs_total_time[2000:]))
+
+        avg_csr_queue_length.append(np.mean(csr_queue_length['billing'][2000:]))
+        avg_csr_queue_wait_time.append(np.mean(obs_csr_queue_wait_time['billing'][2000:]))
+
+        avg_sl.append(float(contact_center.csr_met_wait_threshold_general)
+                      / len(contact_center.total_time))
+
+        avg_abandons.append(float(contact_center.abandons)
+                            / len(contact_center.total_time))
+
+    # Confidence intervals
+    confidence_level = 0.05
+    z_crit = stats.norm.ppf(1 - confidence_level / 2)
+
+    print('Mean time in the system = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_time_in_system),
+                                                                       z_crit * stats.sem(avg_time_in_system, axis=None,
+                                                                                          ddof=1)))
+    print('Mean queue length = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_csr_queue_length),
+                                                                 z_crit * stats.sem(avg_csr_queue_length, axis=None,
+                                                                                    ddof=1)))
+    print('Mean queue time = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_csr_queue_wait_time),
+                                                               z_crit * stats.sem(avg_csr_queue_wait_time, axis=None,
+                                                                                  ddof=1)))
+    print('Mean Service Level = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_sl),
+                                                                  z_crit * stats.sem(avg_sl, axis=None, ddof=1)))
+
+    print('Mean Abandon  = {:.4f} +/- {:.4f} (95 CI)'.format(np.mean(avg_abandons),
+                                                             z_crit * stats.sem(avg_abandons, axis=None, ddof=1)))
+
+
+class SimulationExperiment(object):
+    """
+    Class that defines a base case simulation
+    """
+
+    def __init__(self, type_issues, type_channel, customer_patience=4., _lambda=5, n_agents=[1, 1, 1], dist_acc=1.0,
+                 num_runs=10, sim_duration=500, not_solved_transfer_prob=0.8, channel_match_accuracy=0.0,
+                 verbose=False, plot=False, warmup_time=10):
+        """
+        Class constructor
+
+        Parameters:
+        -----------
+            type_issues: (list) list of contact issues
+            type_channel: (list) list of communication channels
+            _lambda: (int) inter-arrival rate (customer/minute)
+            n_agents: (int) number of CSR per queue
+            dist_acc: (float) contact distribution accuracy
+            num_runs: (int) number of simulation runs to perform
+            sim_duration: (int) simulation duration (minutes)
+            not_solved_transfer_prob: (float) probability of customer request transfer after not solving problem
+            channel_match_accuracy: (float) matching accuracy of customer issue and most efficient channel
+            verbose: (bool) print log activity
+            plot: (bool) plot graphs at the end
+        """
+
+        self.num_runs = num_runs
+        self.sim_duration = sim_duration
+        self.type_issues = type_issues
+        self.type_channel = type_channel
+        self.verbose = verbose
+        self.n_agents = n_agents
+        self._lambda = _lambda
+        self.dist_acc = dist_acc
+        self.customer_patience = customer_patience
+        self.not_solved_transfer_prob = not_solved_transfer_prob
+        self.plot = plot
+        self.channel_match_accuracy = channel_match_accuracy
+        self.warmup_time = warmup_time
+
+    def run(self):
+        np.random.seed(1)
+        avg_time_in_system = []
+        avg_sl = []
+        avg_abandons = []
+        avg_resolutions = []
+        avg_total_waiting_time = []
+        avg_csr_queue_length = {}
+        avg_csr_queue_wait_time = {}
+        avg_sl_queue = {}
+        avg_csr_queue_util = {}
+
+        for issue in self.type_issues:
+            avg_csr_queue_length[issue] = []
+            avg_csr_queue_util[issue] = []
+            avg_csr_queue_wait_time[issue] = []
+            avg_sl_queue[issue] = []
+
+        # SECTION TO RUN ANALYSIS
+        for i in range(self.num_runs):
+
+            if i % 10 == 0:
+                print(str(i)+"/"+str(self.num_runs))
+
+            # SECTION TO CONFIGURE SIMULATION
+            channel_specifications = {'phone': {'capabilities_list': ['issue_a', 'issue_b', 'issue_c'],
+                                                'channel_mu': 1.0,
+                                                'resolution_prob': 0.5,
+                                                'not_solved_transfer_prob': self.not_solved_transfer_prob,
+                                                'reliability': 0.99,
+                                                'capacity': 10000},
+                                      'web': {'capabilities_list': ['issue_a', 'issue_b'],
+                                              'channel_mu': 2.0,
+                                              'resolution_prob': 0.75,
+                                              'not_solved_transfer_prob': self.not_solved_transfer_prob,
+                                              'reliability': 0.99,
+                                              'capacity': 10000}
+                                      }
+
+            csr_specifications = {'issue_a': {'num_agents': self.n_agents[0],
+                                              'mu_agents': 1.0/2,
+                                              'resolution_prob': 0.80},
+                                  'issue_b': {'num_agents': self.n_agents[1],
+                                              'mu_agents': 1.0/4,
+                                              'resolution_prob': 0.95},
+                                  'issue_c': {'num_agents': self.n_agents[2],
+                                              'mu_agents': 1.0/4,
+                                              'resolution_prob': 0.95}
+                                  }
+
+            # arrays to record data
+            obs_time = []
+            obs_abandons = []
+            obs_resolutions = []
+            obs_total_time = []
+            obs_csr_met_wait_threshold_general = []
+            total_waiting_time = []
+            queue_length = {}
+            csr_queue_length = {}
+            obs_csr_queue_wait_time = {}
+            obs_csr_met_wait_threshold_queue = {}
+            obs_csr_queue_util = {}
+
+            for channel in self.type_channel:
+                queue_length[channel] = []
+            for issue in self.type_issues:
+                csr_queue_length[issue] = []
+                obs_csr_queue_wait_time[issue] = []
+                obs_csr_met_wait_threshold_queue[issue] = []
+                obs_csr_queue_util[issue] = []
+
+            # set the random number seed
+            np.random.seed(i)
+
+            # create the Simpy environment
+            env = simpy.Environment()
+
+            # create contact center
+            contact_center = ContactCenter(env=env,
+                                           _lambda=self._lambda,
+                                           channel_types=self.type_channel,
+                                           issue_types=self.type_issues,
+                                           contact_distribution_accuracy=self.dist_acc,
+                                           channels_specifications=channel_specifications,
+                                           csrs_specifications=csr_specifications,
+                                           customer_patience=self.customer_patience,
+                                           wrong_routing_aht=2.,
+                                           csr_transfer_priority=0,
+                                           channel_match_accuracy=self.channel_match_accuracy,
+                                           threshold=0.5,
+                                           verbose=self.verbose,
+                                           warmup_time=self.warmup_time)
+
+            # add the contact center run process
+            env.process(contact_center.run())
+
+            # add the observation process
+            env.process(observe(env=env,
+                                simu_contact_center=contact_center,
+                                types_channels=self.type_channel,
+                                types_issues=self.type_issues,
+                                obs_time=obs_time,
+                                obs_abandons=obs_abandons,
+                                obs_resolutions=obs_resolutions,
+                                obs_total_time=obs_total_time,
+                                queue_length=queue_length,
+                                csr_queue_length=csr_queue_length,
+                                obs_csr_queue_wait_time=obs_csr_queue_wait_time,
+                                obs_csr_met_wait_threshold_general=obs_csr_met_wait_threshold_general,
+                                obs_csr_met_wait_threshold_queue=obs_csr_met_wait_threshold_queue,
+                                obs_csr_queue_util=obs_csr_queue_util,
+                                warmup_time=self.warmup_time))
+
+            # run simulation
+            env.run(until=self.sim_duration)
+
+            # Calculate statistics
+            avg_time_in_system.append(np.mean(obs_total_time))
+
+            csr_waiting_time = 0
+            csr_cust_count = 0
+
+            # Calculate statistics for specific issue queues (assisted-service phase)
+            for issue in self.type_issues:
+
+                # Calculate average queue length for specific issue
+                avg_csr_queue_length[issue].append(np.mean(csr_queue_length[issue]))
+
+                # Calculate average waiting time for specific issue
+                avg_csr_queue_wait_time[issue].append(np.mean(obs_csr_queue_wait_time[issue]))
+
+                # Calculate average CSR utilization rates for specific issue
+                avg_csr_queue_util[issue].append(float(np.mean(obs_csr_queue_util[issue]))
+                                                 / csr_specifications[issue]['num_agents'])
+
+                # Cumulative waiting time for all customers. This variable is used to calculate the overall
+                # average waiting time
+                csr_waiting_time = csr_waiting_time + np.sum(obs_csr_queue_wait_time[issue][0])
+
+                # Overall customers count. This variable is used to calculate overall statistics
+                csr_cust_count = csr_cust_count + len(obs_csr_queue_wait_time[issue][0])
+
+                # Store in dictionary the Service Level for the specific queue
+                avg_sl_queue[issue].append(float(contact_center.csr_met_wait_threshold_queue[issue])
+                                           / float(contact_center.csr_transfers[issue]))
+
+            # Calculate overall waiting time (assisted-service phase)
+            avg_total_waiting_time.append(float(csr_waiting_time)/csr_cust_count)
+
+            # Calculate overall Service Level (assisted-service phase)
+            avg_sl.append(float(contact_center.csr_met_wait_threshold_general)
+                          / float(contact_center.transfers))
+
+            # Calculate overall abandon rate
+            avg_abandons.append(float(contact_center.abandons)
+                                / len(contact_center.total_time))
+
+            # Calculate overall contact resolution rate
+            avg_resolutions.append(float(contact_center.resolutions)
+                                   / len(contact_center.total_time))
+
+        # Check if plot is required
+        if self.plot:
+
+            # create a plot showing the queue length at each time
+            plt.figure()
+            for issue in self.type_issues:
+                plt.step(obs_time, csr_queue_length[issue], where='post', label=issue)
+            plt.xlabel('Simulation Time (min)')
+            plt.ylabel('Queue Length')
+            plt.legend(loc='best')
+
+            # create a plot showing the average queue length at each time
+            plt.figure()
+            for issue in self.type_issues:
+                plt.plot(obs_time, np.divide(np.cumsum(csr_queue_length[issue]).astype('float'),
+                                             1 + np.arange(len(csr_queue_length[issue]))), label=issue)
+            plt.xlabel('Simulation Time (min)')
+            plt.ylabel('Average Queue Length')
+            plt.legend(loc='best')
+
+        print('stats')
+
+        # Confidence intervals
+        confidence_level = 0.05
+        z_crit = stats.norm.ppf(1 - confidence_level / 2)
+
+        # Print results
+        print('Mean time in the system = {:.4f} +/- {:.4f}'.format(np.mean(avg_time_in_system),
+                                                                   z_crit * stats.sem(avg_time_in_system,
+                                                                                      axis=None, ddof=1)))
+
+        for issue in self.type_issues:
+            print('Mean Queue Length in {} = {:.4f} +/- {:.4f}'.format(issue, np.mean(avg_csr_queue_length[issue]),
+                                                                       z_crit * stats.sem(avg_csr_queue_length[issue],
+                                                                                          axis=None, ddof=1)))
+
+        for issue in self.type_issues:
+            print('Mean SL in {} = {:.4f} +/- {:.4f}'.format(issue, np.mean(avg_sl_queue[issue]),
+                                                             z_crit * stats.sem(avg_sl_queue[issue],
+                                                                                axis=None, ddof=1)))
+
+        print('Mean Service Level = {:.4f} +/- {:.4f}'.format(np.mean(avg_sl),
+                                                              z_crit * stats.sem(avg_sl, axis=None, ddof=1)))
+
+        print('Mean Abandon  = {:.4f} +/- {:.4f}'.format(np.mean(avg_abandons),
+                                                         z_crit * stats.sem(avg_abandons, axis=None, ddof=1)))
+
+        print('Mean Resolution  = {:.4f} +/- {:.4f}'.format(np.mean(avg_resolutions),
+                                                            z_crit * stats.sem(avg_resolutions, axis=None,
+                                                                               ddof=1)))
+        print('Mean Wait Time  = {:.4f} +/- {:.4f}'.format(np.mean(avg_total_waiting_time),
+                                                           z_crit * stats.sem(avg_total_waiting_time, axis=None,
+                                                                              ddof=1)))
+
+        for issue in self.type_issues:
+            print('Mean CSR Utilization in {} = {:.4f} +/- {:.4f}'.format(issue, np.mean(avg_csr_queue_util[issue]),
+                                                                          z_crit * stats.sem(avg_csr_queue_util[issue],
+                                                                                             axis=None, ddof=1)))
+
+
+# Run simulation for several contact routing accuracies
+cntc_dist_acc = [.60, .65, .70, .75, .80, .85, .90, .95, 1.0]
+for dist_acc in cntc_dist_acc:
+    dist_acc_case = SimulationExperiment(type_issues=['issue_a', 'issue_b'],
+                                         type_channel=['phone', 'web'],
+                                         customer_patience=4.,
+                                         _lambda=20,
+                                         n_agents=[16, 21, 0],
+                                         dist_acc=dist_acc,
+                                         num_runs=100,
+                                         sim_duration=3000,
+                                         not_solved_transfer_prob=0.8,
+                                         channel_match_accuracy=0.0,
+                                         verbose=False,
+                                         plot=False)
+
+    # Run simulation experiments
+    dist_acc_case.run()
+
+# Run simulation for several contact channel matching accuracy
+ch_match_accuracy = [.55, .60, .65, .70, .75, .80, .85, .90, .95, 1.0]
+for ch_acc in ch_match_accuracy:
+
+    channel_matching_case = SimulationExperiment(type_issues=['issue_a', 'issue_b'],
+                                                 type_channel=['phone','web'],
+                                                 customer_patience=4.,
+                                                 _lambda=20,
+                                                 n_agents=[16, 21, 0],
+                                                 dist_acc=0.6,
+                                                 num_runs=100,
+                                                 sim_duration=3000,
+                                                 not_solved_transfer_prob=0.8,
+                                                 channel_match_accuracy=ch_acc,
+                                                 verbose=False,
+                                                 plot=False)
+
+    # Run simulation experiments
+    channel_matching_case.run()
+
+
+# Manually find optimal number of CSRs
+dist_acc_case = SimulationExperiment(type_issues=['issue_a', 'issue_b'],
+                                     type_channel=['phone', 'web'],
+                                     customer_patience=4.,
+                                     _lambda=20,
+                                     n_agents=[13, 16, 0],
+                                     dist_acc=.6,
+                                     num_runs=15,
+                                     sim_duration=1000+60*8,
+                                     not_solved_transfer_prob=0.8,
+                                     channel_match_accuracy=0.0,
+                                     verbose=False,
+                                     plot=False,
+                                     warmup_time=1000)
+
+# Run simulation experiments
+dist_acc_case.run()
+
